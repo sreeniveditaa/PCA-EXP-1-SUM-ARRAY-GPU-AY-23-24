@@ -30,140 +30,50 @@ Google Colab with NVCC Compiler
 
 ## PROGRAM:
 ```c
-%%writefile kernel.cu
+%%cu
 #include <cuda_runtime.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <time.h>
-#include <math.h>
 
-#define CHECK(call)                                                   \
-{                                                                     \
-    const cudaError_t error = call;                                   \
-    if (error != cudaSuccess)                                         \
-    {                                                                 \
-        printf("Error: %s:%d, ", __FILE__, __LINE__);                 \
-        printf("code: %d, reason: %s\n", error, cudaGetErrorString(error)); \
-        exit(1);                                                      \
-    }                                                                 \
-}
-
-double seconds()
-{
-    return (double)clock() / CLOCKS_PER_SEC;
-}
-
-void checkResult(float* hostRef, float* gpuRef, const int N)
-{
-    double epsilon = 1.0E-8;
-    for (int i = 0; i < N; i++)
-    {
-        if (fabs(hostRef[i] - gpuRef[i]) > epsilon)
-        {
-            printf("Arrays do not match!\n");
-            printf("host %5.2f gpu %5.2f at index %d\n", hostRef[i], gpuRef[i], i);
-            return;
-        }
-    }
-    printf("Arrays match.\n");
-}
-
-void initialData(float* ip, int size)
-{
-    time_t t;
-    srand((unsigned)time(&t));
-    for (int i = 0; i < size; i++)
-    {
-        ip[i] = (float)(rand() & 0xFF) / 10.0f;
-    }
-}
-
-void sumArraysOnHost(float* A, float* B, float* C, const int N)
-{
-    for (int idx = 0; idx < N; idx++)
-    {
-        C[idx] = A[idx] + B[idx];
-    }
-}
-
-__global__ void sumArraysOnGPU(float* A, float* B, float* C, int N)
-{
+__global__ void add(float *a, float *b, float *c, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < N) C[i] = A[i] + B[i];
+    if (i < n) c[i] = a[i] + b[i];
 }
 
-int main(int argc, char** argv)
-{
-    int dev = 0;
-    cudaDeviceProp deviceProp;
-    CHECK(cudaGetDeviceProperties(&deviceProp, dev));
-    CHECK(cudaSetDevice(dev));
-
-    printf("Using Device %d: %s\n", dev, deviceProp.name);
-
-    int nElem = 1 << 24;  // 16777216 elements
-    printf("Vector size %d\n", nElem);
-
-    size_t nBytes = nElem * sizeof(float);
-
-    float* h_A, * h_B, * hostRef, * gpuRef;
-    h_A = (float*)malloc(nBytes);
-    h_B = (float*)malloc(nBytes);
-    hostRef = (float*)malloc(nBytes);
-    gpuRef = (float*)malloc(nBytes);
-
-    double iStart, iElaps;
-
-    iStart = seconds();
-    initialData(h_A, nElem);
-    initialData(h_B, nElem);
-    iElaps = seconds() - iStart;
-    printf("initialization:\t\t%f sec\n", iElaps);
-
-    memset(hostRef, 0, nBytes);
-    memset(gpuRef, 0, nBytes);
-
-    iStart = seconds();
-    sumArraysOnHost(h_A, h_B, hostRef, nElem);
-    iElaps = seconds() - iStart;
-    printf("sumMatrix on host:\t%f sec\n", iElaps);
-
-    float* d_A, * d_B, * d_C;
-    CHECK(cudaMalloc((float**)&d_A, nBytes));
-    CHECK(cudaMalloc((float**)&d_B, nBytes));
-    CHECK(cudaMalloc((float**)&d_C, nBytes));
-
-    CHECK(cudaMemcpy(d_A, h_A, nBytes, cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(d_B, h_B, nBytes, cudaMemcpyHostToDevice));
-
-    int iLen = 512;
-    dim3 block(iLen);
-    dim3 grid((nElem + block.x - 1) / block.x);
-
-    iStart = seconds();
-    sumArraysOnGPU<<<grid, block>>>(d_A, d_B, d_C, nElem);
-    CHECK(cudaDeviceSynchronize());
-    iElaps = seconds() - iStart;
-    printf("sumMatrix on gpu :\t%f sec <<<(%d,%d), (%d,1)>>>\n", iElaps, grid.x, grid.y, block.x);
-
-    CHECK(cudaGetLastError());
-    CHECK(cudaMemcpy(gpuRef, d_C, nBytes, cudaMemcpyDeviceToHost));
-
-    checkResult(hostRef, gpuRef, nElem);
-
-    CHECK(cudaFree(d_A));
-    CHECK(cudaFree(d_B));
-    CHECK(cudaFree(d_C));
-
-    free(h_A);
-    free(h_B);
-    free(hostRef);
-    free(gpuRef);
-
+int main() {
+    int n = 1 << 20;  // 1M elements
+    size_t size = n * sizeof(float);
+    
+    float *h_a = (float*)malloc(size);
+    float *h_b = (float*)malloc(size);
+    float *h_c = (float*)malloc(size);
+    
+    for (int i = 0; i < n; i++) {
+        h_a[i] = i;
+        h_b[i] = i * 2;
+    }
+    
+    float *d_a, *d_b, *d_c;
+    cudaMalloc(&d_a, size);
+    cudaMalloc(&d_b, size);
+    cudaMalloc(&d_c, size);
+    
+    cudaMemcpy(d_a, h_a, size, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_b, h_b, size, cudaMemcpyHostToDevice);
+    
+    add<<<(n + 255) / 256, 256>>>(d_a, d_b, d_c, n);
+    
+    cudaMemcpy(h_c, d_c, size, cudaMemcpyDeviceToHost);
+    
+    printf("h_c[0] = %.0f (expected 0)\n", h_c[0]);
+    printf("h_c[100] = %.0f (expected 300)\n", h_c[100]);
+    printf("Success!\n");
+    
+    cudaFree(d_a); cudaFree(d_b); cudaFree(d_c);
+    free(h_a); free(h_b); free(h_c);
+    
     return 0;
 }
-
 ```
 
 ## OUTPUT:
